@@ -12,3 +12,4 @@ len_wm = len(bwm1.wm_bit)
 bwm1 = WaterMark(password_img=1, password_wm=1)
 wm_extract = bwm1.extract('embedded.png', wm_shape=len_wm, mode='str')
 print(f'Il watermark estratto è: {wm_extract}')
+
