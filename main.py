@@ -1,4 +1,4 @@
-from scramblery import scramblery as sc
+import scramblery as sc
 
 type = 'signFlip'  # 'signFlip' or 'permutation'
 seed = 1234
