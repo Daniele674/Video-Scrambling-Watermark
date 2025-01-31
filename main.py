@@ -1,6 +1,6 @@
 from scramblery import scramblery as sc
 
-type = 'permutation'  # 'signFlip' or 'permutation'
+type = 'signFlip'  # 'signFlip' or 'permutation'
 seed = 1234
 password_img = 1
 password_wm = 1
