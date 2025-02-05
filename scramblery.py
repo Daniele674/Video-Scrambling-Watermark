@@ -379,7 +379,7 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
         output.seek(0)
 
         process = subprocess.Popen(
-            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -preset slow -q:v 0 -crf 10 {output_video_path}",
+            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -preset slow -q:v 0 -crf 23 {output_video_path}",
             shell=True, stdin=subprocess.PIPE)
         process.stdin.write(output.read())
         process.stdin.close()
