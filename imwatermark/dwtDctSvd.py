@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 import pywt
-import math
 import pprint
 from scipy.fftpack import dct, idct
 

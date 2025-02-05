@@ -1,4 +1,5 @@
-import scramblery as sc
+from scramblery import scramblery as sc
+import time
 
 type = 'signFlip'  # 'signFlip' or 'permutation'
 seed = 1234
@@ -26,5 +27,12 @@ video_path = 'testSet/videoBreve.mp4'
 scrambled_video_path = "output_video.mp4"
 descrambled_video_path = "output_video_descrambled.mp4"
 
+start_time = time.time()
+
 sc.scramblevideo(video_path, scrambled_video_path, scramble_settings)
+
+end_time = time.time()
+elapsed_time = end_time - start_time
+print("Elapsed time: ", elapsed_time)
+
 sc.descramblevideo(scrambled_video_path, descrambled_video_path, descramble_settings)
