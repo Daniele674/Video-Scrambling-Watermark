@@ -1,17 +1,12 @@
-import sys
 import mediapipe as mp
-import cv2
 import numpy as np
 import os
-import random
-from blind_watermark import WaterMark
 import jpeglib
 from imwatermark import WatermarkEncoder, WatermarkDecoder
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding
-from reedsolo import RSCodec, ReedSolomonError
-import subprocess
+from reedsolo import RSCodec
 
 # Global variables to store the seed, type, and num_to_flip
 global_seed = None
@@ -22,7 +17,6 @@ rs = RSCodec(15)  # 10 ecc symbols
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh()
-import random
 
 
 def get_facial_landmarks(frame):
@@ -315,16 +309,20 @@ def scrambleface(img, first_frame, type, password_img, password_wm, seed=None, w
         return scrambled_image
 
 
+import io
+import subprocess
+import cv2
+
+
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, progress_callback=None):
-    # Check if scramble_settings is provided, else use default settings
     if scramble_settings is None:
         scramble_settings = {
             'type': 'permutation',
-            'num_to_flip': 0,  # Number of coefficients to flip for 'signFlip'
+            'num_to_flip': 0,
             'seed': 1,
             'password_img': 1,
             'password_wm': 1,
-            'write': False  # Important: this should always be False for video processing
+            'write': False
         }
     else:
         if "write" in scramble_settings and scramble_settings["write"]:
@@ -332,7 +330,6 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
                 "Warning: The 'write' setting in scramble_settings must be False for video processing. Overriding it to False.")
             scramble_settings["write"] = False
 
-    # Open the video file
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
         print(f"Error: Could not open video {input_video_path}.")
@@ -345,6 +342,8 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
 
     frame_number = 0
     first_frame = None
+    frames = []
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -367,35 +366,34 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
             print(f"An error occurred while processing frame {frame_number}: {str(e)}")
             scrambled_frame = frame
 
-        # Write each frame to a temporary image file
-        cv2.imwrite(f"temp/frame_{frame_number:04d}.jpg", scrambled_frame)
+        _, buffer = cv2.imencode('.jpg', scrambled_frame)
+        frames.append(buffer)
 
     cap.release()
     cv2.destroyAllWindows()
     print("Video processing completed.")
 
-    # Use ffmpeg to convert the image sequence to a video file
-    compression_ratio = 10  # Adjust this value to control the compression ratio
-    subprocess.call(
-        f"ffmpeg -y -r {fps} -i temp/frame_%04d.jpg -vcodec libx264 -preset slow -q:v 0 -crf {compression_ratio} {output_video_path}",
-        shell=True)
-    # subprocess.call(f"ffmpeg -y -r {fps} -i temp/frame_%04d.jpg -vcodec mpeg1video -q:v 0 {output_video_path}", shell=True)
+    with io.BytesIO() as output:
+        for frame in frames:
+            output.write(frame.tobytes())
+        output.seek(0)
 
-    # Delete temporary image files
-    for file_name in os.listdir("temp"):
-        if file_name.endswith(".jpg"):
-            os.remove(f"temp/{file_name}")
+        process = subprocess.Popen(
+            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -preset slow -q:v 0 -crf 10 {output_video_path}",
+            shell=True, stdin=subprocess.PIPE)
+        process.stdin.write(output.read())
+        process.stdin.close()
+        process.wait()
 
 
 def descramblevideo(input_video_path, output_video_path=None, descramble_settings=None, progress_callback=None):
-    # Check if scramble_settings is provided, else use default settings
     if descramble_settings is None:
         descramble_settings = {
             'seed': 1,
             'wm_shape': None,
             'password_img': 1,
             'password_wm': 1,
-            'write': False  # Important: this should always be False for video processing
+            'write': False
         }
     else:
         if "write" in descramble_settings and descramble_settings["write"]:
@@ -403,7 +401,6 @@ def descramblevideo(input_video_path, output_video_path=None, descramble_setting
                 "Warning: The 'write' setting in scramble_settings must be False for video processing. Overriding it to False.")
             descramble_settings["write"] = False
 
-    # Open the video file
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
         print(f"Error: Could not open video {input_video_path}.")
@@ -416,6 +413,7 @@ def descramblevideo(input_video_path, output_video_path=None, descramble_setting
 
     frame_number = 0
     first_frame = None
+    frames = []
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -439,20 +437,21 @@ def descramblevideo(input_video_path, output_video_path=None, descramble_setting
             print(f"An error occurred while processing frame {frame_number}: {str(e)}")
             descrambled_frame = frame
 
-        # Write each frame to a temporary image file
-        cv2.imwrite(f"temp/frame_{frame_number:04d}.jpg", descrambled_frame)
+        _, buffer = cv2.imencode('.jpg', descrambled_frame)
+        frames.append(buffer)
 
     cap.release()
     cv2.destroyAllWindows()
     print("Video processing completed.")
 
-    # Use ffmpeg to convert the image sequence to a video file
-    compression_ratio = 23  # Adjust this value to control the compression ratio
-    subprocess.call(
-        f"ffmpeg -y -r {fps} -i temp/frame_%04d.jpg -vcodec libx264 -crf {compression_ratio} {output_video_path}",
-        shell=True)
+    with io.BytesIO() as output:
+        for frame in frames:
+            output.write(frame.tobytes())
+        output.seek(0)
 
-    # Delete temporary image files
-    for file_name in os.listdir("temp"):
-        if file_name.endswith(".jpg"):
-            os.remove(f"temp/{file_name}")
+        process = subprocess.Popen(
+            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -crf 23 {output_video_path}",
+            shell=True, stdin=subprocess.PIPE)
+        process.stdin.write(output.read())
+        process.stdin.close()
+        process.wait()
