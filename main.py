@@ -1,38 +1,32 @@
 from scramblery import scramblery as sc
 import time
 
-type = 'signFlip'  # 'signFlip' or 'permutation'
-seed = 1234
-password_img = 1
-password_wm = 1
+key = b'supersegreto1234'   # Chiave di cifratura (16, 24 o 32 byte)
+
+# Configurazioni di scrambling (senza la chiave)
+scramble_type = 'permutation'  # 'signFlip' o 'permutation'
+random_seed = 1234
 
 scramble_settings = {
-    'type': type,  # 'signFlip' or 'permutation'
-    'num_to_flip': 63,  # Number of coefficients to flip for signFlip type from 0 to 64
-    'seed': seed,
-    'password_img': password_img,
-    'password_wm': password_wm,
-    'write': False  # Should always be False for video processing
+    'scramble_type': scramble_type,
+    'num_to_flip': 64,  # Numero di coefficienti da modificare (solo per 'signFlip')
+    'seed': random_seed
 }
 
-descramble_settings = {
-    'wm_shape': 222,
-    'seed': seed,
-    'password_img': password_img,
-    'password_wm': password_wm,
-    'write': False  # Should always be False for video processing
-}
+video_input_path = 'testSet/Human_safari.mp4'
+video_scrambled_path = "output_video.mp4"
+video_descrambled_path = "output_video_descrambled.mp4"
 
-video_path = 'testSet/videoBreve.mp4'
-scrambled_video_path = "output_video.mp4"
-descrambled_video_path = "output_video_descrambled.mp4"
-
+# Misura il tempo di esecuzione
 start_time = time.time()
 
-sc.scramblevideo(video_path, scrambled_video_path, scramble_settings)
+print("Inizio scrambling del video...")
+# Passa la chiave come parametro separato
+sc.scramblevideo(video_input_path, video_scrambled_path, scramble_settings, key)
 
-end_time = time.time()
-elapsed_time = end_time - start_time
-print("Elapsed time: ", elapsed_time)
+elapsed_time = time.time() - start_time
+print(f"Tempo impiegato per lo scrambling: {elapsed_time:.2f} secondi")
 
-sc.descramblevideo(scrambled_video_path, descrambled_video_path, descramble_settings)
+print("Inizio descrambling del video...")
+sc.descramblevideo(video_scrambled_path, video_descrambled_path, key)
+print("Processo completato!")

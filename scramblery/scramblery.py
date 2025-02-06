@@ -1,17 +1,29 @@
 import mediapipe as mp
 import numpy as np
-import os
 import jpeglib
 from imwatermark import WatermarkEncoder, WatermarkDecoder
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding
 from reedsolo import RSCodec
+import os
+import io
+import cv2
+import subprocess
+import time
 
-# Global variables to store the seed, type, and num_to_flip
-global_seed = None
-global_type = None
-global_num_to_flip = None
+max_retries = 3  # Numero massimo di tentativi
+retry_delay = 0.5  # Secondi di attesa tra un tentativo e l'altro
+
+
+# Classe per incapsulare lo stato di scrambling/descrambling
+class ScrambleState:
+    def __init__(self, seed=None, scramble_type=None, num_to_flip=None, face_region=None):
+        self.seed = seed
+        self.scramble_type = scramble_type
+        self.num_to_flip = num_to_flip
+        self.face_region = face_region
+
 
 rs = RSCodec(15)  # 10 ecc symbols
 
@@ -20,56 +32,39 @@ face_mesh = mp_face_mesh.FaceMesh()
 
 
 def get_facial_landmarks(frame):
-    """a function for detecting facial landmarks"""
+    """Funzione per rilevare i landmark facciali."""
     height, width, _ = frame.shape
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = face_mesh.process(frame_rgb)
 
     facelandmarks = []
-    for facial_landmarks in result.multi_face_landmarks:
-        for i in range(0, 468):
-            pt1 = facial_landmarks.landmark[i]
-            x = int(pt1.x * width)
-            y = int(pt1.y * height)
-            facelandmarks.append([x, y])
-    return np.array(facelandmarks, np.int32)
+    if result.multi_face_landmarks:  # Aggiunto controllo
+        for facial_landmarks in result.multi_face_landmarks:
+            for i in range(468):
+                pt1 = facial_landmarks.landmark[i]
+                x = int(pt1.x * width)
+                y = int(pt1.y * height)
+                facelandmarks.append([x, y])
+    return np.array(facelandmarks, np.int32) if facelandmarks else None  # Evita errori su array vuoto
 
 
-# permutazione anche del coefficiente DC
+# Permutazione anche del coefficiente DC
 def scramble_dct_block(block, seed):
-    # Flatten the block into a 1D array
-    flat_block = block.flatten()
-
-    # Generate a permutation of the indices
-    np.random.seed(seed)
-    perm = np.random.permutation(len(flat_block))
-
-    # Apply the permutation to the coefficients
-    scrambled_coefficients = flat_block[perm]
-
-    # Reshape the scrambled block back into the original shape
-    return scrambled_coefficients.reshape(block.shape)
+    """Scramble dei coefficienti DCT all'interno di un blocco usando un seme fisso."""
+    np.random.seed(seed)  # Imposta il seme per la riproducibilità
+    perm = np.random.permutation(block.size)  # Genera la permutazione
+    return block.ravel()[perm].reshape(block.shape)  # Applica la permutazione e ripristina la forma originale
 
 
 def descramble_dct_block(block, seed):
-    # Flatten the block into a 1D array
-    flat_block = block.flatten()
-
-    # Generate the original permutation of the indices
-    np.random.seed(seed)
-    perm = np.random.permutation(len(flat_block))
-
-    # Generate the inverse permutation
-    inv_perm = np.argsort(perm)
-
-    # Apply the inverse permutation to the coefficients
-    descrambled_coefficients = flat_block[inv_perm]
-
-    # Reshape the descrambled block back into the original shape
-    return descrambled_coefficients.reshape(block.shape)
+    """Riordina i coefficienti DCT scrambleati utilizzando lo stesso seme."""
+    np.random.seed(seed)  # Imposta il seme per ottenere la stessa permutazione
+    perm = np.random.permutation(block.size)  # Ricrea la stessa permutazione
+    inv_perm = np.argsort(perm)  # Calcola l'inverso della permutazione
+    return block.ravel()[inv_perm].reshape(block.shape)  # Riordina e ripristina la forma originale
 
 
-# Encryption and Decryption functions
+# Funzioni di Encryption e Decryption
 def encrypt_string(key, plaintext):
     backend = default_backend()
     iv = os.urandom(16)  # Genera un vettore di inizializzazione casuale
@@ -93,160 +88,29 @@ def decrypt_string(key, ciphertext):
     return plaintext
 
 
-def descrambleface(img, first_frame, wm_shape, password_img, password_wm, seed=None, write=True):
-    global global_seed, global_type, global_num_to_flip
-
-    img_name = None
-
-    if isinstance(img, str):
-        image_path = img
-        img = cv2.imread(img)
-        if img is None:
-            raise ValueError("Could not read the image")
-
-        img_name = os.path.splitext(os.path.basename(image_path))[0]
-
-    key = b'supersegreto1234'  # Chiave di decifratura
-
-    if first_frame:
-        decoder = WatermarkDecoder('bytes', 504)
-        # Decode the watermark from the image
-        watermark = decoder.decode(img, 'dwtDctSvd')
-        # The watermark is in bytes, so we decode it to string
-        ciphertext = watermark
-        cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
-    else:
-        decoder = WatermarkDecoder('bytes', 376)
-        # Decode the watermark from the image
-        watermark = decoder.decode(img, 'dwtDctSvd')
-        # The watermark is in bytes, so we decode it to string
-        ciphertext = watermark
-        cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
-
-    print('Testo cifrato estratto:', ciphertext)
-
-    ciphertext, _, errors = rs.decode(ciphertext)
-
-    print(list(errors))
-
-    print('Testo cifrato corretto:', ciphertext)
-
-    extracted_data = decrypt_string(key, ciphertext)
-
-    extracted_data = extracted_data.decode('utf-8')
-
-    print('Dati estratti:', extracted_data)
-
-    # Split the extracted_data string into a list of substrings
-    data_list = extracted_data.split()
-
-    if first_frame:
-        # Assign the first string to seed_number
-        seed_number = int(data_list[0])
-
-        # Assign the last four strings to face_region
-        face_region = [int(i) for i in data_list[1:5]]
-
-        type = data_list[5]
-
-        global_seed = seed_number
-        global_type = type
-
-        # Extract num_to_flip from the watermark
-        if type == "signFlip":
-            num_to_flip = int(data_list[6])
-            global_num_to_flip = num_to_flip
-
-    # If it's not the first frame, use the values stored in the global variables
-    else:
-        face_region = [int(i) for i in data_list]
-
-        seed_number = global_seed
-        type = global_type
-
-        # Extract num_to_flip from the watermark
-        if type == "signFlip":
-            num_to_flip = global_num_to_flip
-
-    np.random.seed(seed_number)
-
-    min_x, max_x, min_y, max_y = face_region
-
-    if type == "signFlip":
-
-        # Read DCT coefficients from the scrambled JPEG file
-        scrambled_image = jpeglib.read_dct('frame.jpg')
-
-        for i in range(min_y, max_y):
-            for j in range(min_x, max_x):
-                matrix = scrambled_image.Y[i, j]
-
-                # Get the shape of the matrix
-                shape = matrix.shape
-
-                # Generate random indices
-                indices = np.random.choice(np.prod(shape), num_to_flip)
-
-                # Convert the indices to 2D coordinates
-                coords = np.unravel_index(indices, shape)
-
-                # Flip the sign of the selected coefficients
-                matrix[coords] *= -1
-
-                scrambled_image.Y[i, j] = matrix
-
-        # Write descrambled coefficients back to a JPEG file
-        scrambled_image.write_dct('output_descrambled.jpg')
-
-        descrambled_image = cv2.imread('output_descrambled.jpg')
-
-        return descrambled_image
-
-    elif type == "permutation":
-
-        # Read DCT coefficients from the scrambled JPEG file
-        scrambled_image = jpeglib.read_dct('frame.jpg')
-
-        # Seconda metodologia tramite permutazione dei coefficienti AC
-        for i in range(min_y, max_y):
-            for j in range(min_x, max_x):
-                scrambled_image.Y[i, j] = descramble_dct_block(scrambled_image.Y[i, j], seed_number)
-
-        # Write descrambled coefficients back to a JPEG file
-        scrambled_image.write_dct('output_descrambled.jpg')
-
-        descrambled_image = cv2.imread('output_descrambled.jpg')
-
-        return descrambled_image
-
-
-def scrambleface(img, first_frame, type, password_img, password_wm, seed=None, write=True, num_to_flip=0):
-    img_name = None
-
+def scrambleface(img, first_frame, scramble_type, key, seed=None, num_to_flip=0):
     if seed is not None:
         np.random.seed(seed)
 
-    if type not in ["signFlip", "permutation"]:
-        raise ValueError("type must be 'signFlip' or 'permutation'")
+    if scramble_type not in ["signFlip", "permutation"]:
+        raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
 
     if isinstance(img, str):
-        image_path = img
         img = cv2.imread(img)
         if img is None:
-            raise ValueError("Could not read the image")
-
-        img_name = os.path.splitext(os.path.basename(image_path))[0]
+            raise ValueError("Impossibile leggere l'immagine")
 
     landmarks = get_facial_landmarks(img)
-    # Define the bounding box around the face using the facial landmarks
-    min_x = np.min(landmarks[:, 0]) // 8  # Dividing by 8 to match DCT block size
+    # Definisce il rettangolo intorno al viso utilizzando i landmark facciali
+    min_x = np.min(landmarks[:, 0]) // 8  # Divido per 8 per adattarsi alla dimensione dei blocchi DCT
     max_x = np.max(landmarks[:, 0]) // 8
     min_y = np.min(landmarks[:, 1]) // 8
     max_y = np.max(landmarks[:, 1]) // 8
 
     if first_frame:
-        data_str = str(seed) + ' ' + str(min_x) + ' ' + str(max_x) + ' ' + str(min_y) + ' ' + str(max_y) + ' ' + type
-        if type == "signFlip":
+        data_str = str(seed) + ' ' + str(min_x) + ' ' + str(max_x) + ' ' + str(min_y) + ' ' + str(
+            max_y) + ' ' + scramble_type
+        if scramble_type == "signFlip":
             data_str = data_str + ' ' + str(num_to_flip)
     else:
         data_str = str(min_x) + ' ' + str(max_x) + ' ' + str(min_y) + ' ' + str(max_y)
@@ -254,7 +118,6 @@ def scrambleface(img, first_frame, type, password_img, password_wm, seed=None, w
     print(data_str)
 
     data_bytes = data_str.encode('utf-8')
-    key = b'supersegreto1234'  # Chiave di cifratura
     ciphertext = encrypt_string(key, data_bytes)
 
     encoded_ciphertext = rs.encode(ciphertext)
@@ -262,196 +125,284 @@ def scrambleface(img, first_frame, type, password_img, password_wm, seed=None, w
     encoder = WatermarkEncoder()
     encoder.set_watermark('bytes', encoded_ciphertext)
     img_encoded = encoder.encode(img, 'dwtDctSvd')
-    cv2.imwrite('frame.jpg', img_encoded, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
-    print("Length of the watermark:", len(encoded_ciphertext) * 8)
+    for attempt in range(max_retries):
+        success = cv2.imwrite('frame.jpg', img_encoded, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
+        if success:
+            break  # Esce dal ciclo se il salvataggio è riuscito
+        print(f"Tentativo {attempt + 1} fallito. Riprovo...")
+        time.sleep(retry_delay)  # Aspetta prima di riprovare
 
-    if type == "signFlip":
+    print("Lunghezza del watermark:", len(encoded_ciphertext) * 8)
 
+    if scramble_type == "signFlip":
         image = jpeglib.read_dct('frame.jpg')
-
         for i in range(min_y, max_y):
             for j in range(min_x, max_x):
                 matrix = image.Y[i, j]
-
-                # Get the shape of the matrix
                 shape = matrix.shape
-
-                # Generate random indices
                 indices = np.random.choice(np.prod(shape), num_to_flip)
-
-                # Convert the indices to 2D coordinates
                 coords = np.unravel_index(indices, shape)
-
-                # Flip the sign of the selected coefficients
                 matrix[coords] *= -1
-
                 image.Y[i, j] = matrix
-
         image.write_dct('output_scrambled.jpg')
-
         scrambled_image = cv2.imread('output_scrambled.jpg')
-
         return scrambled_image
 
-    elif type == "permutation":
-
+    elif scramble_type == "permutation":
         image = jpeglib.read_dct('frame.jpg')
-
-        # Seconda metodologia tramite permutazione
         for i in range(min_y, max_y):
             for j in range(min_x, max_x):
                 image.Y[i, j] = scramble_dct_block(image.Y[i, j], seed)
-
         image.write_dct('output_scrambled.jpg')
-
         scrambled_image = cv2.imread('output_scrambled.jpg')
-
         return scrambled_image
 
 
-import io
-import subprocess
-import cv2
+def descrambleface(img, first_frame, key, state):
+    """
+    Se `first_frame` è True, estrae e decodifica i dati dal watermark e aggiorna l'oggetto state.
+    Negli altri frame usa i valori salvati in state.
+    """
+    if isinstance(img, str):
+        img = cv2.imread(img)
+        if img is None:
+            raise ValueError("Impossibile leggere l'immagine")
+
+    if first_frame:
+        decoder = WatermarkDecoder('bytes', 504)  # 504 = chiave di 16 byte + 15 byte di ECC
+        watermark = decoder.decode(img, 'dwtDctSvd')
+        ciphertext = watermark
+        for attempt in range(max_retries):
+            success = cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
+            if success:
+                break  # Esce dal ciclo se il salvataggio è riuscito
+            print(f"Tentativo {attempt + 1} fallito. Riprovo...")
+            time.sleep(retry_delay)  # Aspetta prima di riprovare
+    else:
+        decoder = WatermarkDecoder('bytes', 376)  # 376 = chiave di 16 byte + 15 byte di ECC
+        watermark = decoder.decode(img, 'dwtDctSvd')
+        ciphertext = watermark
+        for attempt in range(max_retries):
+            success = cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
+            if success:
+                break  # Esce dal ciclo se il salvataggio è riuscito
+            print(f"Tentativo {attempt + 1} fallito. Riprovo...")
+            time.sleep(retry_delay)  # Aspetta prima di riprovare
+
+    print('Testo cifrato estratto:', ciphertext)
+    ciphertext, _, errors = rs.decode(ciphertext)
+    print(list(errors))
+    print('Testo cifrato corretto:', ciphertext)
+    extracted_data = decrypt_string(key, ciphertext)
+    extracted_data = extracted_data.decode('utf-8')
+    print('Dati estratti:', extracted_data)
+
+    data_list = extracted_data.split()
+
+    if first_frame:
+        state.seed = int(data_list[0])
+        state.face_region = [int(i) for i in data_list[1:5]]
+        state.scramble_type = data_list[5]
+        if state.scramble_type == "signFlip":
+            state.num_to_flip = int(data_list[6])
+    else:
+        # Nei frame successivi il watermark contiene solo la regione facciale
+        state.face_region = [int(i) for i in data_list]
+
+    # Imposta il seme per la riproducibilità
+    np.random.seed(state.seed)
+
+    min_x, max_x, min_y, max_y = state.face_region
+
+    if state.scramble_type == "signFlip":
+        scrambled_image = jpeglib.read_dct('frame.jpg')
+        for i in range(min_y, max_y):
+            for j in range(min_x, max_x):
+                matrix = scrambled_image.Y[i, j]
+                shape = matrix.shape
+                # Usa num_to_flip preso dallo state
+                indices = np.random.choice(np.prod(shape), state.num_to_flip)
+                coords = np.unravel_index(indices, shape)
+                matrix[coords] *= -1
+                scrambled_image.Y[i, j] = matrix
+        scrambled_image.write_dct('output_descrambled.jpg')
+        descrambled_image = cv2.imread('output_descrambled.jpg')
+        return descrambled_image
+
+    elif state.scramble_type == "permutation":
+        scrambled_image = jpeglib.read_dct('frame.jpg')
+        for i in range(min_y, max_y):
+            for j in range(min_x, max_x):
+                scrambled_image.Y[i, j] = descramble_dct_block(scrambled_image.Y[i, j], state.seed)
+        scrambled_image.write_dct('output_descrambled.jpg')
+        descrambled_image = cv2.imread('output_descrambled.jpg')
+        return descrambled_image
 
 
-def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, progress_callback=None):
+# Funzione helper per eliminare file in sicurezza
+def safe_remove(file_path):
+    """Elimina il file specificato se esiste."""
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"Errore nella rimozione di {file_path}: {e}")
+
+
+# Funzione helper per creare il video utilizzando ffmpeg con parametri extra opzionali
+def create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args=None):
+    command = [
+        'ffmpeg',
+        '-y',
+        '-r', str(fps),
+        '-f', 'image2pipe',
+        '-vcodec', 'mjpeg',
+        '-i', '-',
+        '-vcodec', 'libx264'
+    ]
+    if extra_args:
+        command.extend(extra_args)
+    command.append(output_video_path)
+
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = process.communicate(input=output_data)
+        if process.returncode != 0:
+            error_message = stderr.decode('utf-8')
+            raise RuntimeError(f"Errore FFmpeg (code {process.returncode}): {error_message}")
+        else:
+            print("Video creato con successo.")
+    except Exception as e:
+        print(f"Si è verificato un errore durante la creazione del video: {e}")
+
+
+# Funzione per elaborare il video in modalità scramble
+def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
         scramble_settings = {
-            'type': 'permutation',
+            'scramble_type': 'permutation',
             'num_to_flip': 0,
-            'seed': 1,
-            'password_img': 1,
-            'password_wm': 1,
-            'write': False
+            'seed': 1
         }
-    else:
-        if "write" in scramble_settings and scramble_settings["write"]:
-            print(
-                "Warning: The 'write' setting in scramble_settings must be False for video processing. Overriding it to False.")
-            scramble_settings["write"] = False
+
+    if len(key) not in [16, 24, 32]:
+        print("La chiave deve essere lunga 16, 24 o 32 byte")
+        exit(1)
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
-        print(f"Error: Could not open video {input_video_path}.")
+        print(f"Errore: impossibile aprire il video {input_video_path}.")
         return
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
     frame_number = 0
-    first_frame = None
     frames = []
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print("Reached the end of the video.")
+            print("Fine del video.")
             break
 
         frame_number += 1
         if progress_callback:
             progress_callback(frame_number, total_frames)
-        print(f"Processing frame {frame_number}/{total_frames}")
+        print(f"Elaborazione frame {frame_number}/{total_frames}")
 
         try:
-            if frame_number == 1:
-                first_frame = True
-                scrambled_frame = scrambleface(frame, first_frame, **scramble_settings)
-            else:
-                first_frame = False
-                scrambled_frame = scrambleface(frame, first_frame, **scramble_settings)
+            first_frame = (frame_number == 1)
+            scrambled_frame = scrambleface(
+                frame,
+                first_frame,
+                scramble_settings['scramble_type'],
+                key,
+                seed=scramble_settings['seed'],
+                num_to_flip=scramble_settings.get('num_to_flip', 0)
+            )
         except Exception as e:
-            print(f"An error occurred while processing frame {frame_number}: {str(e)}")
+            print(f"Errore nell'elaborazione del frame {frame_number}: {str(e)}")
             scrambled_frame = frame
 
-        _, buffer = cv2.imencode('.jpg', scrambled_frame)
-        frames.append(buffer)
+        success, buffer = cv2.imencode('.jpg', scrambled_frame)
+        if success:
+            frames.append(buffer)
+        else:
+            print(f"Errore nella codifica del frame {frame_number}")
 
     cap.release()
     cv2.destroyAllWindows()
-    print("Video processing completed.")
+    print("Elaborazione video completata.")
 
     with io.BytesIO() as output:
         for frame in frames:
             output.write(frame.tobytes())
-        output.seek(0)
+        output_data = output.getvalue()
 
-        process = subprocess.Popen(
-            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -preset slow -q:v 0 -crf 23 {output_video_path}",
-            shell=True, stdin=subprocess.PIPE)
-        process.stdin.write(output.read())
-        process.stdin.close()
-        process.wait()
+    extra_args = ['-preset', 'slow', '-q:v', '0', '-crf', '23']
+    create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
+
+    safe_remove('frame.jpg')
+    safe_remove('output_scrambled.jpg')
 
 
-def descramblevideo(input_video_path, output_video_path=None, descramble_settings=None, progress_callback=None):
-    if descramble_settings is None:
-        descramble_settings = {
-            'seed': 1,
-            'wm_shape': None,
-            'password_img': 1,
-            'password_wm': 1,
-            'write': False
-        }
-    else:
-        if "write" in descramble_settings and descramble_settings["write"]:
-            print(
-                "Warning: The 'write' setting in scramble_settings must be False for video processing. Overriding it to False.")
-            descramble_settings["write"] = False
-
+# Funzione per elaborare il video in modalità descramble
+def descramblevideo(input_video_path, output_video_path=None, key=None, progress_callback=None):
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
-        print(f"Error: Could not open video {input_video_path}.")
+        print(f"Errore: impossibile aprire il video {input_video_path}.")
         return
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if len(key) not in [16, 24, 32]:
+        print("Chiave errata!")
+        exit(1)
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
     frame_number = 0
-    first_frame = None
     frames = []
+
+    # Inizializza lo stato da passare alle funzioni
+    state = ScrambleState()
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print("Reached the end of the video.")
             break
 
         frame_number += 1
         if progress_callback:
             progress_callback(frame_number, total_frames)
-        print(f"Processing frame {frame_number}/{total_frames}")
+        print(f"Elaborazione frame {frame_number}/{total_frames}")
 
         try:
-            if frame_number == 1:
-                first_frame = True
-                descrambled_frame = descrambleface(frame, first_frame, **descramble_settings)
-            else:
-                first_frame = False
-                descrambled_frame = descrambleface(frame, first_frame, **descramble_settings)
+            first_frame = (frame_number == 1)
+            descrambled_frame = descrambleface(frame, first_frame, key, state)
         except Exception as e:
-            print(f"An error occurred while processing frame {frame_number}: {str(e)}")
+            print(f"Errore nell'elaborazione del frame {frame_number}: {str(e)}")
             descrambled_frame = frame
 
-        _, buffer = cv2.imencode('.jpg', descrambled_frame)
-        frames.append(buffer)
+        success, buffer = cv2.imencode('.jpg', descrambled_frame)
+        if success:
+            frames.append(buffer)
+        else:
+            print(f"Errore nella codifica del frame {frame_number}")
 
     cap.release()
     cv2.destroyAllWindows()
-    print("Video processing completed.")
 
     with io.BytesIO() as output:
         for frame in frames:
             output.write(frame.tobytes())
-        output.seek(0)
+        output_data = output.getvalue()
 
-        process = subprocess.Popen(
-            f"ffmpeg -y -r {fps} -f image2pipe -vcodec mjpeg -i - -vcodec libx264 -crf 23 {output_video_path}",
-            shell=True, stdin=subprocess.PIPE)
-        process.stdin.write(output.read())
-        process.stdin.close()
-        process.wait()
+    extra_args = ['-crf', '23']
+    create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
+
+    safe_remove('frame.jpg')
+    safe_remove('output_descrambled.jpg')
