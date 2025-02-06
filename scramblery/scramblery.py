@@ -259,7 +259,7 @@ def create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args=Non
         '-f', 'image2pipe',
         '-vcodec', 'mjpeg',
         '-i', '-',
-        '-vcodec', 'libx264'
+        '-vcodec', 'libx264'    # Per MPEG 1 usare 'mpeg1video'
     ]
     if extra_args:
         command.extend(extra_args)

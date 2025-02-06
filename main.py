@@ -13,7 +13,7 @@ scramble_settings = {
     'seed': random_seed
 }
 
-video_input_path = 'testSet/Human_safari.mp4'
+video_input_path = 'testSet/videoBreve.mp4'
 video_scrambled_path = "output_video.mp4"
 video_descrambled_path = "output_video_descrambled.mp4"
 
