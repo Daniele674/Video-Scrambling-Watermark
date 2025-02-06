@@ -12,8 +12,6 @@ import cv2
 import subprocess
 import time
 
-max_retries = 3  # Numero massimo di tentativi
-retry_delay = 0.5  # Secondi di attesa tra un tentativo e l'altro
 
 
 # Classe per incapsulare lo stato di scrambling/descrambling
@@ -24,6 +22,9 @@ class ScrambleState:
         self.num_to_flip = num_to_flip
         self.face_region = face_region
 
+
+max_retries = 3  # Numero massimo di tentativi
+retry_delay = 0.5  # Secondi di attesa tra un tentativo e l'altro
 
 rs = RSCodec(15)  # 10 ecc symbols
 
@@ -281,7 +282,34 @@ def create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args=Non
         print(f"Si è verificato un errore durante la creazione del video: {e}")
 
 
-# Funzione per elaborare il video in modalità scramble
+def extract_audio(input_video_path, audio_output_path):
+    command = [
+        'ffmpeg',
+        '-i', input_video_path,
+        '-map', 'a',
+        '-q:a', '0',
+        '-y',
+        audio_output_path
+    ]
+    result = subprocess.run(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    if b'Stream #0:1' not in result.stderr:
+        print("No audio stream found.")
+        return False
+    return True
+
+def combine_audio_video(video_path, audio_path, output_path):
+    command = [
+        'ffmpeg',
+        '-y',
+        '-i', video_path,
+        '-i', audio_path,
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-strict', 'experimental',
+        output_path
+    ]
+    subprocess.run(command, check=True)
+
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
         scramble_settings = {
@@ -293,6 +321,10 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
     if len(key) not in [16, 24, 32]:
         print("La chiave deve essere lunga 16, 24 o 32 byte")
         exit(1)
+
+    # Estrai l'audio dal video originale
+    audio_output_path = 'extracted_audio.aac'
+    has_audio = extract_audio(input_video_path, audio_output_path)
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
@@ -347,20 +379,30 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
     extra_args = ['-preset', 'slow', '-q:v', '0', '-crf', '23']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
 
+    if has_audio:
+        # Combina l'audio estratto con il video scramblato
+        final_output_path = 'temp_output_video.mp4'
+        combine_audio_video(output_video_path, audio_output_path, final_output_path)
+        safe_remove(output_video_path)
+        os.rename(final_output_path, output_video_path)
+        safe_remove(audio_output_path)
+
     safe_remove('frame.jpg')
     safe_remove('output_scrambled.jpg')
 
-
-# Funzione per elaborare il video in modalità descramble
 def descramblevideo(input_video_path, output_video_path=None, key=None, progress_callback=None):
+    if len(key) not in [16, 24, 32]:
+        print("Chiave errata!")
+        exit(1)
+
+    # Estrai l'audio dal video originale
+    audio_output_path = 'extracted_audio.aac'
+    has_audio = extract_audio(input_video_path, audio_output_path)
+
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
         print(f"Errore: impossibile aprire il video {input_video_path}.")
         return
-
-    if len(key) not in [16, 24, 32]:
-        print("Chiave errata!")
-        exit(1)
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -403,6 +445,14 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
     extra_args = ['-crf', '23']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
+
+    if has_audio:
+        # Combina l'audio estratto con il video descramblato
+        final_output_path = 'temp_output_video.mp4'
+        combine_audio_video(output_video_path, audio_output_path, final_output_path)
+        safe_remove(output_video_path)
+        os.rename(final_output_path, output_video_path)
+        safe_remove(audio_output_path)
 
     safe_remove('frame.jpg')
     safe_remove('output_descrambled.jpg')
