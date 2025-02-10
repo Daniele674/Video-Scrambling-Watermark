@@ -1,7 +1,7 @@
 from scramblery import scramblery as sc
 import time
 
-key = b'supersegreto1234'   # Chiave di cifratura (16, 24 o 32 byte)
+key = b'supersegreto1236'   # Chiave di cifratura (16, 24 o 32 byte)
 
 # Configurazioni di scrambling (senza la chiave)
 scramble_type = 'permutation'  # 'signFlip' o 'permutation'

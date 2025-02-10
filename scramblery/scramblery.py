@@ -62,6 +62,7 @@ def scramble_sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
             image.Y[i, j] = matrix
     return image
 
+
 def descramble_sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
     rng = np.random.default_rng(seed)
     for i in range(min_y, max_y):
@@ -74,24 +75,33 @@ def descramble_sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
             image.Y[i, j] = matrix
     return image
 
+
 def scramble_permutation(image, min_x, max_x, min_y, max_y, seed):
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed)  # Inizializza il generatore di numeri casuali
+    block_size = image.Y[min_y, min_x].size  # Determina la dimensione di un blocco
+    perm = rng.permutation(block_size)  # Genera UNA SOLA permutazione
+
     for i in range(min_y, max_y):
         for j in range(min_x, max_x):
             block = image.Y[i, j]
-            perm = rng.permutation(block.size)
-            image.Y[i, j] = block.ravel()[perm].reshape(block.shape)
+            image.Y[i, j] = block.ravel()[perm].reshape(block.shape)  # Applica la stessa permutazione
+
     return image
 
+
 def descramble_permutation(image, min_x, max_x, min_y, max_y, seed):
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed)  # Inizializza il generatore di numeri casuali
+    block_size = image.Y[min_y, min_x].size  # Determina la dimensione di un blocco
+    perm = rng.permutation(block_size)  # Genera UNA SOLA permutazione
+    inv_perm = np.argsort(perm)  # Calcola la permutazione inversa
+
     for i in range(min_y, max_y):
         for j in range(min_x, max_x):
             block = image.Y[i, j]
-            perm = rng.permutation(block.size)
-            inv_perm = np.argsort(perm)
-            image.Y[i, j] = block.ravel()[inv_perm].reshape(block.shape)
+            image.Y[i, j] = block.ravel()[inv_perm].reshape(block.shape)  # Applica l'inverso della permutazione
+
     return image
+
 
 # Funzioni di Encryption e Decryption
 def encrypt_string(key, plaintext):
@@ -117,7 +127,7 @@ def decrypt_string(key, ciphertext):
     return plaintext
 
 
-def scrambleface(img, first_frame, key, state):
+def scrambleface(img, first_frame, state):
     if state.scramble_type not in ["signFlip", "permutation"]:
         raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
 
@@ -138,7 +148,7 @@ def scrambleface(img, first_frame, key, state):
         data_str = f"{min_x} {max_x} {min_y} {max_y}"
 
     data_bytes = data_str.encode('utf-8')
-    ciphertext = encrypt_string(key, data_bytes)
+    ciphertext = encrypt_string(state.key, data_bytes)
     encoded_ciphertext = rs.encode(ciphertext)
 
     encoder = WatermarkEncoder()
@@ -150,7 +160,6 @@ def scrambleface(img, first_frame, key, state):
             break
         time.sleep(retry_delay)
 
-
     image = jpeglib.read_dct('frame.jpg')
     if state.scramble_type == "signFlip":
         image = scramble_sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
@@ -161,7 +170,7 @@ def scrambleface(img, first_frame, key, state):
     return scrambled_image
 
 
-def descrambleface(img, first_frame, key, state):
+def descrambleface(img, first_frame, state):
     if isinstance(img, str):
         img = cv2.imread(img)
         if img is None:
@@ -177,7 +186,7 @@ def descrambleface(img, first_frame, key, state):
         time.sleep(retry_delay)
 
     ciphertext, _, errors = rs.decode(ciphertext)
-    extracted_data = decrypt_string(key, ciphertext)
+    extracted_data = decrypt_string(state.key, ciphertext)
     extracted_data = extracted_data.decode('utf-8')
 
     data_list = extracted_data.split()
@@ -328,7 +337,7 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
 
             try:
                 first_frame = (frame_number == 1)
-                scrambled_frame = scrambleface(frame, first_frame, state.key, state)
+                scrambled_frame = scrambleface(frame, first_frame, state)
             except Exception as e:
                 print(f"Errore nell'elaborazione del frame {frame_number}: {str(e)}")
                 scrambled_frame = frame
@@ -400,7 +409,7 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
             try:
                 first_frame = (frame_number == 1)
-                descrambled_frame = descrambleface(frame, first_frame, state.key, state)
+                descrambled_frame = descrambleface(frame, first_frame, state)
             except Exception as e:
                 print(f"Errore nell'elaborazione del frame {frame_number}: {str(e)}")
                 descrambled_frame = frame
