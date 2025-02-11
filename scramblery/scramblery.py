@@ -12,6 +12,7 @@ import cv2
 import subprocess
 import time
 import hashlib
+from tqdm import tqdm
 
 
 # Classe per incapsulare lo stato di scrambling/descrambling
@@ -284,10 +285,6 @@ def combine_audio_video(video_path, audio_path, output_path):
         output_path
     ]
     subprocess.run(command, check=True)
-
-
-from tqdm import tqdm
-
 
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
