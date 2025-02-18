@@ -127,7 +127,6 @@ def decrypt_string(key, ciphertext):
     plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
     return plaintext
 
-
 def scrambleface(img, first_frame, state):
     if state.scramble_type not in ["signFlip", "permutation"]:
         raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
@@ -152,11 +151,8 @@ def scrambleface(img, first_frame, state):
     ciphertext = encrypt_string(state.key, data_bytes)
     encoded_ciphertext = rs.encode(ciphertext)
 
-    encoder = WatermarkEncoder()
-    encoder.set_watermark('bytes', encoded_ciphertext)
-    img_encoded = encoder.encode(img, 'dwtDctSvd')
     for attempt in range(max_retries):
-        success = cv2.imwrite('frame.jpg', img_encoded, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
+        success = cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
         if success:
             break
         time.sleep(retry_delay)
@@ -166,9 +162,24 @@ def scrambleface(img, first_frame, state):
         image = scramble_sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
     elif state.scramble_type == "permutation":
         image = scramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
-    image.write_dct('output_scrambled.jpg')
+
+    for attempt in range(max_retries):
+        try:
+            image.write_dct('output_scrambled.jpg')
+            break
+        except Exception as e:
+            print(f"Errore nella scrittura del DCT (tentativo {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            else:
+                raise e
+
     scrambled_image = cv2.imread('output_scrambled.jpg')
-    return scrambled_image
+
+    encoder = WatermarkEncoder()
+    encoder.set_watermark('bytes', encoded_ciphertext)
+    img_encoded = encoder.encode(scrambled_image, 'dwtDctSvd')
+    return img_encoded
 
 
 def descrambleface(img, first_frame, state):
@@ -286,6 +297,7 @@ def combine_audio_video(video_path, audio_path, output_path):
     ]
     subprocess.run(command, check=True)
 
+
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
         scramble_settings = {
@@ -299,10 +311,6 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
 
     key_hash = hashlib.sha256(key).hexdigest()
     seed = int(key_hash, 16)
-    # print(f"Seed: {seed}")
-
-    audio_output_path = 'extracted_audio.aac'
-    has_audio = extract_audio(input_video_path, audio_output_path)
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
@@ -359,13 +367,6 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
     extra_args = ['-preset', 'slow', '-q:v', '0', '-crf', '10']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
 
-    if has_audio:
-        final_output_path = 'temp_output_video.mp4'
-        combine_audio_video(output_video_path, audio_output_path, final_output_path)
-        safe_remove(output_video_path)
-        os.rename(final_output_path, output_video_path)
-        safe_remove(audio_output_path)
-
     safe_remove('frame.jpg')
     safe_remove('output_scrambled.jpg')
 
@@ -377,10 +378,6 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
     key_hash = hashlib.sha256(key).hexdigest()
     seed = int(key_hash, 16)
-    # print(f"Seed: {seed}")
-
-    audio_output_path = 'extracted_audio.aac'
-    has_audio = extract_audio(input_video_path, audio_output_path)
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
@@ -429,13 +426,6 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
     extra_args = ['-crf', '23']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
-
-    if has_audio:
-        final_output_path = 'temp_output_video.mp4'
-        combine_audio_video(output_video_path, audio_output_path, final_output_path)
-        safe_remove(output_video_path)
-        os.rename(final_output_path, output_video_path)
-        safe_remove(audio_output_path)
 
     safe_remove('frame.jpg')
     safe_remove('output_descrambled.jpg')
