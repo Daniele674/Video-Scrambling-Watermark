@@ -35,20 +35,25 @@ face_mesh = mp_face_mesh.FaceMesh()
 
 
 def get_facial_landmarks(frame):
-    """Funzione per rilevare i landmark facciali."""
+    """Function to detect facial landmarks."""
     height, width, _ = frame.shape
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    result = face_mesh.process(frame_rgb)
+    with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=10) as face_mesh:
+        result = face_mesh.process(frame_rgb)
 
-    facelandmarks = []
-    if result.multi_face_landmarks:  # Aggiunto controllo
+    facelandmarks_list = []
+    if result.multi_face_landmarks:
         for facial_landmarks in result.multi_face_landmarks:
+            facelandmarks = []
             for i in range(468):
                 pt1 = facial_landmarks.landmark[i]
                 x = int(pt1.x * width)
                 y = int(pt1.y * height)
                 facelandmarks.append([x, y])
-    return np.array(facelandmarks, np.int32) if facelandmarks else None  # Evita errori su array vuoto
+            facelandmarks_list.append(np.array(facelandmarks, np.int32))
+
+    # print(f"Number of faces detected: {len(facelandmarks_list)}")
+    return facelandmarks_list
 
 
 def scramble_sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
@@ -136,32 +141,55 @@ def scrambleface(img, first_frame, state):
         if img is None:
             raise ValueError("Impossibile leggere l'immagine")
 
-    landmarks = get_facial_landmarks(img)
-    min_x = np.min(landmarks[:, 0]) // 8
-    max_x = np.max(landmarks[:, 0]) // 8
-    min_y = np.min(landmarks[:, 1]) // 8
-    max_y = np.max(landmarks[:, 1]) // 8
+    # Rileva i volti e raccogli le coordinate di ciascun volto
+    landmarks_list = get_facial_landmarks(img)
+    if not landmarks_list:
+        return img  # Nessun volto rilevato
 
-    if first_frame and state.scramble_type == "signFlip":
-        data_str = f"{state.num_to_flip} {min_x} {max_x} {min_y} {max_y}"
-    else:
-        data_str = f"{min_x} {max_x} {min_y} {max_y}"
+    data_str_list = []
+    for landmarks in landmarks_list:
+        min_x = np.min(landmarks[:, 0]) // 8
+        max_x = np.max(landmarks[:, 0]) // 8
+        min_y = np.min(landmarks[:, 1]) // 8
+        max_y = np.max(landmarks[:, 1]) // 8
 
-    data_bytes = data_str.encode('utf-8')
+        if first_frame and state.scramble_type == "signFlip":
+            data_str = f"{state.num_to_flip} {min_x} {max_x} {min_y} {max_y}"
+        else:
+            data_str = f"{min_x} {max_x} {min_y} {max_y}"
+        data_str_list.append(data_str)
+
+    # Concatena le informazioni dei volti e prepara il payload
+    concatenated_data_str = " ".join(data_str_list)
+    data_bytes = concatenated_data_str.encode('utf-8')
     ciphertext = encrypt_string(state.key, data_bytes)
     encoded_ciphertext = rs.encode(ciphertext)
 
+    # Crea l'header a 4 byte che indica la lunghezza del payload in bit
+    payload_length_bits = len(encoded_ciphertext) * 8
+    header = payload_length_bits.to_bytes(4, byteorder='big')
+    # Unisce header e payload in un unico array di byte
+    full_payload = header + encoded_ciphertext
+
+    # Salva temporaneamente l'immagine e leggi i coefficienti DCT
     for attempt in range(max_retries):
         success = cv2.imwrite('frame.jpg', img, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
         if success:
             break
         time.sleep(retry_delay)
-
     image = jpeglib.read_dct('frame.jpg')
-    if state.scramble_type == "signFlip":
-        image = scramble_sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
-    elif state.scramble_type == "permutation":
-        image = scramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
+
+    # Applica le trasformazioni di scrambling nelle regioni facciali
+    for landmarks in landmarks_list:
+        min_x = np.min(landmarks[:, 0]) // 8
+        max_x = np.max(landmarks[:, 0]) // 8
+        min_y = np.min(landmarks[:, 1]) // 8
+        max_y = np.max(landmarks[:, 1]) // 8
+
+        if state.scramble_type == "signFlip":
+            image = scramble_sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
+        elif state.scramble_type == "permutation":
+            image = scramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
 
     for attempt in range(max_retries):
         try:
@@ -176,11 +204,11 @@ def scrambleface(img, first_frame, state):
 
     scrambled_image = cv2.imread('output_scrambled.jpg')
 
+    # Inserisce in un unico watermark il full_payload (header + payload)
     encoder = WatermarkEncoder()
-    encoder.set_watermark('bytes', encoded_ciphertext)
+    encoder.set_watermark('bytes', full_payload)
     img_encoded = encoder.encode(scrambled_image, 'dwtDctSvd')
     return img_encoded
-
 
 def descrambleface(img, first_frame, state):
     if isinstance(img, str):
@@ -429,3 +457,61 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
     safe_remove('frame.jpg')
     safe_remove('output_descrambled.jpg')
+
+
+
+
+
+
+
+
+# def scrambleface(img, first_frame, state):
+#     if state.scramble_type not in ["signFlip", "permutation"]:
+#         raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
+#
+#     if isinstance(img, str):
+#         img = cv2.imread(img)
+#         if img is None:
+#             raise ValueError("Impossibile leggere l'immagine")
+#
+#     landmarks = get_facial_landmarks(img)
+#     min_x = np.min(landmarks[:, 0]) // 8
+#     max_x = np.max(landmarks[:, 0]) // 8
+#     min_y = np.min(landmarks[:, 1]) // 8
+#     max_y = np.max(landmarks[:, 1]) // 8
+#
+#     if first_frame and state.scramble_type == "signFlip":
+#         data_str = f"{state.num_to_flip} {min_x} {max_x} {min_y} {max_y}"
+#     else:
+#         data_str = f"{min_x} {max_x} {min_y} {max_y}"
+#
+#     data_bytes = data_str.encode('utf-8')
+#     ciphertext = encrypt_string(state.key, data_bytes)
+#     encoded_ciphertext = rs.encode(ciphertext)
+#
+#     encoder = WatermarkEncoder()
+#     encoder.set_watermark('bytes', encoded_ciphertext)
+#     img_encoded = encoder.encode(img, 'dwtDctSvd')
+#     for attempt in range(max_retries):
+#         success = cv2.imwrite('frame.jpg', img_encoded, params=[cv2.IMWRITE_JPEG_QUALITY, 100])
+#         if success:
+#             break
+#         time.sleep(retry_delay)
+#
+#     image = jpeglib.read_dct('frame.jpg')
+#     if state.scramble_type == "signFlip":
+#         image = scramble_sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
+#     elif state.scramble_type == "permutation":
+#         image = scramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
+#     for attempt in range(max_retries):
+#         try:
+#             image.write_dct('output_scrambled.jpg')
+#             break
+#         except Exception as e:
+#             print(f"Errore nella scrittura del DCT (tentativo {attempt + 1}): {e}")
+#             if attempt < max_retries - 1:
+#                 time.sleep(retry_delay)
+#             else:
+#                 raise e
+#     scrambled_image = cv2.imread('output_scrambled.jpg')
+#     return scrambled_image
