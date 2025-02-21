@@ -4,7 +4,7 @@ import time
 key = b'supersegreto1236'  # Chiave di cifratura (16, 24 o 32 byte)
 
 # Configurazioni di scrambling (senza la chiave)
-scramble_type = 'permutation'  # 'signFlip' o 'permutation'
+scramble_type = 'signFlip'  # 'signFlip' o 'permutation'
 
 scramble_settings = {
     'scramble_type': scramble_type,
@@ -27,7 +27,7 @@ print(f"Tempo impiegato per lo scrambling: {elapsed_time:.2f} secondi")
 start_time = time.time()
 
 print("Inizio descrambling del video...")
-sc.descramblevideo(video_scrambled_path, video_descrambled_path, key)
+# sc.descramblevideo(video_scrambled_path, video_descrambled_path, key)
 
 elapsed_time = time.time() - start_time
 print(f"Tempo impiegato per il descrambling: {elapsed_time:.2f} secondi")
