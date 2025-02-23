@@ -306,12 +306,10 @@ def extract_audio(input_video_path, audio_output_path):
     ]
     result = subprocess.run(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     if b'Stream #0:1' not in result.stderr:
-        print("No audio stream found.")
         return False
     return True
 
 def combine_audio_video(video_path, audio_path, output_path):
-    temp_output_path = output_path + "_temp.mp4"
     command = [
         'ffmpeg',
         '-y',
@@ -320,10 +318,9 @@ def combine_audio_video(video_path, audio_path, output_path):
         '-c:v', 'copy',
         '-c:a', 'aac',
         '-strict', 'experimental',
-        temp_output_path
+        output_path
     ]
     subprocess.run(command, check=True)
-    os.replace(temp_output_path, output_path)
 
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
@@ -357,9 +354,7 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
     )
 
     audio_output_path = 'extracted_audio.aac'
-    if not extract_audio(input_video_path, audio_output_path):
-        print("Errore: impossibile estrarre l'audio.")
-        return
+    has_audio = extract_audio(input_video_path, audio_output_path)
 
     with tqdm(total=total_frames, desc="Elaborazione frame", leave=False) as pbar:
         while cap.isOpened():
@@ -397,10 +392,17 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
 
     extra_args = ['-preset', 'slow', '-q:v', '0', '-crf', '10']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
-    combine_audio_video(output_video_path, audio_output_path, output_video_path)
+
+    if has_audio:
+        # Combina l'audio estratto con il video scramblato
+        final_output_path = 'temp_output_video.mp4'
+        combine_audio_video(output_video_path, audio_output_path, final_output_path)
+        safe_remove(output_video_path)
+        os.rename(final_output_path, output_video_path)
+        safe_remove(audio_output_path)
+
     safe_remove('frame.jpg')
     safe_remove('output_scrambled.jpg')
-    safe_remove(audio_output_path)
 
 def descramblevideo(input_video_path, output_video_path=None, key=None, progress_callback=None):
     if len(key) not in [16, 24, 32]:
@@ -423,9 +425,7 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
     state = ScrambleState(seed=seed, key=key)
 
     audio_output_path = 'extracted_audio.aac'
-    if not extract_audio(input_video_path, audio_output_path):
-        print("Errore: impossibile estrarre l'audio.")
-        return
+    has_audio = extract_audio(input_video_path, audio_output_path)
 
     with tqdm(total=total_frames, desc="Elaborazione frame", leave=False) as pbar:
         while cap.isOpened():
@@ -461,7 +461,14 @@ def descramblevideo(input_video_path, output_video_path=None, key=None, progress
 
     extra_args = ['-crf', '23']
     create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args)
-    combine_audio_video(output_video_path, audio_output_path, output_video_path)
+
+    if has_audio:
+        # Combina l'audio estratto con il video descramblato
+        final_output_path = 'temp_output_video.mp4'
+        combine_audio_video(output_video_path, audio_output_path, final_output_path)
+        safe_remove(output_video_path)
+        os.rename(final_output_path, output_video_path)
+        safe_remove(audio_output_path)
+
     safe_remove('frame.jpg')
     safe_remove('output_descrambled.jpg')
-    safe_remove(audio_output_path)
