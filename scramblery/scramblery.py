@@ -15,6 +15,7 @@ import hashlib
 from tqdm import tqdm
 import tempfile
 
+
 # Classe per incapsulare lo stato di scrambling/descrambling
 class ScrambleState:
     def __init__(self, seed=None, scramble_type=None, num_to_flip=None, face_region=None, key=None):
@@ -23,6 +24,7 @@ class ScrambleState:
         self.num_to_flip = num_to_flip
         self.face_region = face_region
         self.key = key
+
 
 max_retries = 3  # Numero massimo di tentativi
 retry_delay = 0.5  # Secondi di attesa tra un tentativo
@@ -37,6 +39,7 @@ face_mesh_detector = mp.solutions.face_mesh.FaceMesh(
     min_tracking_confidence=0.3
 )
 
+
 def get_facial_landmarks(frame):
     """Rileva i landmark facciali utilizzando l'istanza globale."""
     height, width, _ = frame.shape
@@ -48,9 +51,10 @@ def get_facial_landmarks(frame):
         for facial_landmarks in result.multi_face_landmarks:
             # Calcola una volta le coordinate per il volto
             pts = np.array([[int(pt.x * width), int(pt.y * height)]
-                             for pt in facial_landmarks.landmark[:468]], np.int32)
+                            for pt in facial_landmarks.landmark[:468]], np.int32)
             facelandmarks_list.append(pts)
     return facelandmarks_list
+
 
 def sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
     """Applica la trasformazione 'sign flip' su una regione (usata sia per scramble che per descramble)."""
@@ -66,6 +70,7 @@ def sign_flip(image, min_x, max_x, min_y, max_y, num_to_flip, seed):
             Y[i, j] = np.clip(matrix, -1023, 1023)
     return image
 
+
 def scramble_permutation(image, min_x, max_x, min_y, max_y, seed):
     rng = np.random.default_rng(seed)
     Y = image.Y
@@ -77,6 +82,7 @@ def scramble_permutation(image, min_x, max_x, min_y, max_y, seed):
             block = block.ravel()[perm].reshape(block.shape)
             Y[i, j] = np.clip(block, -1023, 1023)
     return image
+
 
 def descramble_permutation(image, min_x, max_x, min_y, max_y, seed):
     rng = np.random.default_rng(seed)
@@ -91,6 +97,7 @@ def descramble_permutation(image, min_x, max_x, min_y, max_y, seed):
             Y[i, j] = np.clip(block, -1023, 1023)
     return image
 
+
 # Funzioni di Encryption e Decryption (rimangono invariate)
 def encrypt_string(key, plaintext):
     backend = default_backend()
@@ -101,6 +108,7 @@ def encrypt_string(key, plaintext):
     padded_plaintext = padder.update(plaintext) + padder.finalize()
     ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
     return iv + ciphertext
+
 
 def decrypt_string(key, ciphertext):
     backend = default_backend()
@@ -113,6 +121,7 @@ def decrypt_string(key, ciphertext):
     plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
     return plaintext
 
+
 def scrambleface(img, first_frame, state):
     if state.scramble_type not in ["signFlip", "permutation"]:
         raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
@@ -124,13 +133,25 @@ def scrambleface(img, first_frame, state):
 
     # Rileva i volti e ottieni le coordinate (calcolate una sola volta per ciascun volto)
     landmarks_list = get_facial_landmarks(img)
-    if not landmarks_list:
-        return img
-
     region_coords = []
     data_str_list = []
-    if first_frame and state.scramble_type == "signFlip":
-        data_str_list.append(str(state.num_to_flip))
+
+    if first_frame:
+        if state.scramble_type == "signFlip":
+            data_str_list.append(str(state.num_to_flip))
+        # Aggiungi valori placeholder se non ci sono volti nel primo frame
+        if not landmarks_list:
+            print('dentro ')
+            data_str_list.extend(["0", "0", "0", "0"])
+            concatenated_data_str = " ".join(data_str_list)
+            data_bytes = concatenated_data_str.encode('utf-8')
+            ciphertext = encrypt_string(state.key, data_bytes)
+            encoded_ciphertext = rs.encode(ciphertext)
+
+            encoder = WatermarkEncoder()
+            encoder.set_watermark('bytes', encoded_ciphertext)
+            img_encoded = encoder.encode(img, 'dwtDctSvd')
+            return img_encoded
 
     for landmarks in landmarks_list:
         min_x = np.min(landmarks[:, 0]) // 8
@@ -220,7 +241,14 @@ def descrambleface(img, first_frame, state):
         data_list = extracted_data.split()
 
         if first_frame:
-            if len(data_list) % 2 == 1:
+            if len(data_list) == 5 and data_list[1:] == ["0", "0", "0", "0"]:
+                state.scramble_type = "signFlip"
+                state.num_to_flip = int(data_list[0])
+                return img
+            elif len(data_list) == 4 and data_list == ["0", "0", "0", "0"]:
+                state.scramble_type = "permutation"
+                return img
+            elif len(data_list) % 2 == 1:
                 state.scramble_type = "signFlip"
                 state.num_to_flip = int(data_list[0])
                 data_list = data_list[1:]
@@ -232,7 +260,8 @@ def descrambleface(img, first_frame, state):
             break
     else:
         safe_remove(temp_frame_path)
-        raise ValueError("Errore nell'estrazione del watermark: numero di valori non corrispondente o nessun watermark nel frame")
+        raise ValueError(
+            "Errore nell'estrazione del watermark: numero di valori non corrispondente o nessun watermark nel frame")
 
     # Calcola le regioni facciali (caching)
     num_faces = len(data_list) // 4
@@ -257,6 +286,7 @@ def descrambleface(img, first_frame, state):
     safe_remove(temp_out_path)
     return descrambled_image
 
+
 # Funzione helper per eliminare file in sicurezza
 def safe_remove(file_path):
     try:
@@ -264,6 +294,7 @@ def safe_remove(file_path):
             os.remove(file_path)
     except Exception as e:
         print(f"Errore nella rimozione di {file_path}: {e}")
+
 
 def create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args=None):
     command = [
@@ -295,6 +326,7 @@ def create_video_with_ffmpeg(fps, output_video_path, output_data, extra_args=Non
     except Exception as e:
         print(f"Si è verificato un errore durante la creazione del video: {e}")
 
+
 def extract_audio(input_video_path, audio_output_path):
     command = [
         'ffmpeg',
@@ -309,6 +341,7 @@ def extract_audio(input_video_path, audio_output_path):
         return False
     return True
 
+
 def combine_audio_video(video_path, audio_path, output_path):
     command = [
         'ffmpeg',
@@ -321,6 +354,7 @@ def combine_audio_video(video_path, audio_path, output_path):
         output_path
     ]
     subprocess.run(command, check=True)
+
 
 def scramblevideo(input_video_path, output_video_path=None, scramble_settings=None, key=None, progress_callback=None):
     if scramble_settings is None:
@@ -403,6 +437,7 @@ def scramblevideo(input_video_path, output_video_path=None, scramble_settings=No
 
     safe_remove('frame.jpg')
     safe_remove('output_scrambled.jpg')
+
 
 def descramblevideo(input_video_path, output_video_path=None, key=None, progress_callback=None):
     if len(key) not in [16, 24, 32]:
