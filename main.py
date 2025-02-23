@@ -11,7 +11,7 @@ scramble_settings = {
     'num_to_flip': 64,  # Numero di coefficienti da modificare (solo per 'signFlip')
 }
 
-video_input_path = 'testSet/volti.mp4'
+video_input_path = 'testSet/Human_safari.mp4'
 video_scrambled_path = "output_video.mp4"
 video_descrambled_path = "output_video_descrambled.mp4"
 
@@ -27,7 +27,7 @@ print(f"Tempo impiegato per lo scrambling: {elapsed_time:.2f} secondi")
 start_time = time.time()
 
 print("Inizio descrambling del video...")
-# sc.descramblevideo(video_scrambled_path, video_descrambled_path, key)
+sc.descramblevideo(video_scrambled_path, video_descrambled_path, key)
 
 elapsed_time = time.time() - start_time
 print(f"Tempo impiegato per il descrambling: {elapsed_time:.2f} secondi")
