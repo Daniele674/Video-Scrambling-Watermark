@@ -116,17 +116,32 @@ def decrypt_string(key, ciphertext):
 def scrambleface(img, first_frame, state):
     if state.scramble_type not in ["signFlip", "permutation"]:
         raise ValueError("Il tipo deve essere 'signFlip' o 'permutation'")
+
     if isinstance(img, str):
         img = cv2.imread(img)
         if img is None:
             raise ValueError("Impossibile leggere l'immagine")
+
+    # Rileva i volti e ottieni le coordinate
     landmarks_list = get_facial_landmarks(img)
-    if not landmarks_list:
-        return img
     region_coords = []
     data_str_list = []
-    if first_frame and state.scramble_type == "signFlip":
-        data_str_list.append(str(state.num_to_flip))
+
+    if first_frame:
+        if state.scramble_type == "signFlip":
+            data_str_list.append(str(state.num_to_flip))
+        # Se non viene rilevato alcun volto nel primo frame, aggiungi placeholder
+        if not landmarks_list:
+            data_str_list.extend(["0", "0", "0", "0"])
+            concatenated_data_str = " ".join(data_str_list)
+            data_bytes = concatenated_data_str.encode('utf-8')
+            ciphertext = encrypt_string(state.key, data_bytes)
+            encoded_ciphertext = rs.encode(ciphertext)
+            encoder = WatermarkEncoder()
+            encoder.set_watermark('bytes', encoded_ciphertext)
+            img_encoded = encoder.encode(img, 'dwtDctSvd')
+            return img_encoded
+
     for landmarks in landmarks_list:
         min_x = np.min(landmarks[:, 0]) // 8
         max_x = np.max(landmarks[:, 0]) // 8
@@ -134,10 +149,13 @@ def scrambleface(img, first_frame, state):
         max_y = np.max(landmarks[:, 1]) // 8
         region_coords.append((min_x, max_x, min_y, max_y))
         data_str_list.append(f"{min_x} {max_x} {min_y} {max_y}")
+
     concatenated_data_str = " ".join(data_str_list)
     data_bytes = concatenated_data_str.encode('utf-8')
     ciphertext = encrypt_string(state.key, data_bytes)
     encoded_ciphertext = rs.encode(ciphertext)
+
+    # Scrittura temporanea per generare la DCT
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
         temp_frame_path = tmp_file.name
     for attempt in range(max_retries):
@@ -146,11 +164,15 @@ def scrambleface(img, first_frame, state):
             break
         time.sleep(retry_delay)
     image = jpeglib.read_dct(temp_frame_path)
+
+    # Applica le trasformazioni nelle regioni facciali rilevate
     for (min_x, max_x, min_y, max_y) in region_coords:
         if state.scramble_type == "signFlip":
             image = sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
         elif state.scramble_type == "permutation":
             image = scramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
+
+    # Salva su file temporaneo per la scrittura DCT
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_out:
         temp_out_path = tmp_out.name
     for attempt in range(max_retries):
@@ -163,27 +185,33 @@ def scrambleface(img, first_frame, state):
                 time.sleep(retry_delay)
             else:
                 raise e
+
     scrambled_image = cv2.imread(temp_out_path)
     encoder = WatermarkEncoder()
     encoder.set_watermark('bytes', encoded_ciphertext)
     img_encoded = encoder.encode(scrambled_image, 'dwtDctSvd')
+
     safe_remove(temp_frame_path)
     safe_remove(temp_out_path)
     return img_encoded
+
 
 def descrambleface(img, first_frame, state):
     if isinstance(img, str):
         img = cv2.imread(img)
         if img is None:
             raise ValueError("Impossibile leggere l'immagine")
+
     initial_length = 376
     max_attempts = 5
     length_increment = 128
+
     for attempt in range(max_attempts):
         current_length = initial_length + attempt * length_increment
         decoder = WatermarkDecoder('bytes', current_length)
         watermark = decoder.decode(img, 'dwtDctSvd')
         ciphertext = watermark
+        # Utilizza un file temporaneo per la lettura JPEG
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
             temp_frame_path = tmp_file.name
         for retry in range(max_retries):
@@ -199,24 +227,36 @@ def descrambleface(img, first_frame, state):
         extracted_data = decrypt_string(state.key, ciphertext)
         extracted_data = extracted_data.decode('utf-8')
         data_list = extracted_data.split()
+
         if first_frame:
-            if len(data_list) % 2 == 1:
+            # Controlla se il watermark corrisponde al placeholder
+            if len(data_list) == 5 and data_list[1:] == ["0", "0", "0", "0"]:
+                state.scramble_type = "signFlip"
+                state.num_to_flip = int(data_list[0])
+                return img
+            elif len(data_list) == 4 and data_list == ["0", "0", "0", "0"]:
+                state.scramble_type = "permutation"
+                return img
+            elif len(data_list) % 2 == 1:
                 state.scramble_type = "signFlip"
                 state.num_to_flip = int(data_list[0])
                 data_list = data_list[1:]
             else:
                 state.scramble_type = "permutation"
+
         expected_length = 4 + (current_length - initial_length) // length_increment * 4
         if len(data_list) == expected_length:
             break
     else:
         safe_remove(temp_frame_path)
-        raise ValueError("Errore nell'estrazione del watermark")
+        raise ValueError("Errore nell'estrazione del watermark: numero di valori non corrispondente o nessun watermark nel frame")
+
     num_faces = len(data_list) // 4
     face_regions = []
     for i in range(num_faces):
         region = [int(data_list[j]) for j in range(i * 4, (i + 1) * 4)]
         face_regions.append(region)
+
     image = jpeglib.read_dct(temp_frame_path)
     safe_remove(temp_frame_path)
     for face_region in face_regions:
@@ -225,12 +265,14 @@ def descrambleface(img, first_frame, state):
             image = sign_flip(image, min_x, max_x, min_y, max_y, state.num_to_flip, state.seed)
         elif state.scramble_type == "permutation":
             image = descramble_permutation(image, min_x, max_x, min_y, max_y, state.seed)
+
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_out:
         temp_out_path = tmp_out.name
     image.write_dct(temp_out_path)
     descrambled_image = cv2.imread(temp_out_path)
     safe_remove(temp_out_path)
     return descrambled_image
+
 
 def safe_remove(file_path):
     try:
