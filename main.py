@@ -19,7 +19,7 @@ print("Inizio scrambling del video...")
 # Misura il tempo di esecuzione
 start_time = time.time()
 
-# sc.scramblevideo(video_input_path, video_scrambled_path, scramble_settings, key)
+sc.scramblevideo(video_input_path, video_scrambled_path, scramble_settings, key)
 
 elapsed_time = time.time() - start_time
 print(f"Tempo impiegato per lo scrambling: {elapsed_time:.2f} secondi")

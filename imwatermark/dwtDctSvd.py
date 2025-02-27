@@ -8,7 +8,7 @@ pp = pprint.PrettyPrinter(indent=2)
 
 
 class EmbedDwtDctSvd(object):
-    def __init__(self, watermarks=[], wmLen=8, scales=[0, 36, 0], block=4):  # 108
+    def __init__(self, watermarks=[], wmLen=8, scales=[0, 108, 0], block=4):  # 108
         self._watermarks = np.array(watermarks)  # converto in array per operazioni vettoriali
         self._wmLen = wmLen
         self._scales = scales

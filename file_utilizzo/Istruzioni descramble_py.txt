@@ -1,0 +1,38 @@
+**ISTRUZIONI PER L'USO**
+
+### 1. Modalità di utilizzo
+
+Installare librerie esterne tramite il comando:
+```
+pip install -r requirements.txt
+```
+
+Per eseguire lo script, aprire un terminale e utilizzare il comando:
+
+```
+python descramble.py [opzioni]
+```
+
+### 2. Parametri a riga di comando
+
+Lo script accetta i seguenti parametri:
+
+- **-k, --key**  
+  *Descrizione*: Chiave di cifratura.  
+  *Dettagli*: Deve essere una stringa la cui codifica in bytes abbia una lunghezza valida (16 bytes).  
+  *Default*: `b'supersegreto1236'`
+
+- **-i, --input_path**  
+  *Descrizione*: Percorso del file video di input.  
+  *Default*: `./output_video.mp4`
+
+- **-o, --output_path**  
+  *Descrizione*: Percorso dove salvare il file video descramblato.  
+  *Default*: `./output_video_descrambled.mp4`
+
+### 3. Esempi d'uso
+
+- **Esempio 1:** Eseguire lo script con i valori di default:
+  ```
+  python descramble.py
+  ```
